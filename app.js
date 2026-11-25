@@ -295,6 +295,41 @@ function renderSkillHistory(student,events,code){
  const modelNote = startModel ? '<p class="muted">Стартовая работа показана как модель. Переходы в её колонке отсчитываются от весеннего МЦКО. Подтверждённая динамика и подсказки по отработке рассчитываются отдельно.</p>' : '';
  return `${renderGradeTransitions(student,events,code)}${coverage}${modelNote}<div class="skillScroll"><table class="skillTable"><thead><tr><th scope="col">Проверяемое умение</th>${mckoHead}${modelHead}${head}${changeHead}<th scope="col">Что дать дальше</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
+// A stratum-wide summary precedes the existing individual student card.
+function stratumPoint(values){
+ const known=values.filter(v=>v===0||v===1),done=known.filter(v=>v===1).length;
+ return known.length?`<strong>${pct(done/known.length*100)}</strong><small>${done} из ${known.length} освоили · нет данных: ${values.length-known.length}</small>`:'<span class="muted">Нет подтверждённых данных</span>';
+}
+function renderStratumCard(students,events,code){
+ let panel=$('stratumCard');
+ if(!panel){
+  panel=document.createElement('section');panel.id='stratumCard';panel.className='panel skillPanel';
+  panel.setAttribute('aria-labelledby','stratumTitle');
+  $('skillStudent').closest('section').before(panel);
+ }
+ const confirmed=(id,row)=>{
+  for(const event of [...events].reverse()){
+   const tasks=event.tasks.filter(task=>row.skills.includes(skillName(task)));
+   if(!tasks.length)continue;
+   const r=elementResult(id,{...event,tasks,originalTasks:event.tasks},'__all');
+   if(r.value!==null&&!r.estimated)return Number(r.value>=100-1e-8);
+  }
+  return undefined;
+ };
+ const rows=gradeTransitions.filter(row=>code==='__all'||row.codes.includes(code)).map(row=>{
+  const spring=students.map(s=>mckoBaseline?.students[s.id]?.[row.index]);
+  const model=students.map((s,i)=>new Set(startModel?.changedSkills[s.id]).has(row.index)?1-spring[i]:spring[i]);
+  const current=students.map(s=>confirmed(s.id,row));
+  const paired=students.map((s,i)=>[spring[i],current[i]]).filter(([a,b])=>(a===0||a===1)&&(b===0||b===1));
+  const delta=paired.length?100*(avg(paired.map(p=>p[1]))-avg(paired.map(p=>p[0]))):null;
+  return `<tr><th scope="row">${esc(row.name)}</th><td class="mckoSkill">${stratumPoint(spring)}</td>${startModel?`<td class="startModel">${stratumPoint(model)}</td>`:''}<td>${stratumPoint(current)}</td><td>${delta===null?'—':`<strong class="${delta>0?'positive':delta<0?'negative':''}">${delta>0?'+':''}${delta.toFixed(1)} п.п.</strong><small>Сопоставлены: ${paired.length} уч.</small>`}</td></tr>`;
+ }).join('');
+ panel.innerHTML=`<div class="panelHead"><div><span class="eyebrow">Карта страты</span><h2 id="stratumTitle">${esc($('group').value)}</h2></div><strong>${students.length} уч.</strong></div>
+ <p class="muted">Сводные результаты всей выбранной страты по умениям. Поиск по ID применяется к карте ученика ниже.</p>
+ <div class="skillScroll"><table class="skillTable"><thead><tr><th scope="col">Проверяемая тема</th><th scope="col" class="mckoSkill">5 класс · МЦКО</th>${startModel?'<th scope="col" class="startModel">6 класс · Стартовая<small>Модель</small></th>':''}<th scope="col">6 класс · КОМ<small>Последний подтверждённый результат каждого ученика</small></th><th scope="col">МЦКО → КОМ</th></tr></thead><tbody>${rows||`<tr><td colspan="5">Для выбранного элемента нет сопоставимых тем.</td></tr>`}</tbody></table></div>
+ <p class="muted">Процент — доля освоивших среди учеников с данными по теме; отсутствие результата не считается нулём. Динамика рассчитана по одним и тем же ученикам, у которых есть оба подтверждённых результата. МЦКО и КОМ проверяют материал разных классов; состав заданий различается. Значения со звёздочкой в сводный результат КОМ не включены.</p>`;
+}
+
 function renderSkillPanel(students,events,code){
  const select = $('skillStudent');
  const previous = select.value;
@@ -389,6 +424,7 @@ function renderMatrix(){
  $('trend').innerHTML=scoredEvents.length?scoredEvents.map((e,i)=>`<div class="barItem"><b>${means[i]===null?'Нет баллов':pct(means[i])}</b><div class="bar" style="height:${means[i]===null?2:Math.max(3,means[i]*1.05)}px"></div><span>${esc(e.id)}</span><small>${date(e.date)}${estimated[i]?' *':''}</small></div>`).join(''):'<p class="noData">Выберите мероприятия</p>';
  const dist=[[`≥ ${data.thresholds.good}% баллов`,good,''],[`${data.thresholds.partial}–<${data.thresholds.good}% баллов`,vals.filter(v=>v>=data.thresholds.partial&&v<data.thresholds.good).length,'midline'],[`< ${data.thresholds.partial}% баллов`,vals.filter(v=>v<data.thresholds.partial).length,'badline'],['Нет результата',students.length-vals.length,'neutral']];
  $('distribution').innerHTML=dist.map(([name,n,cls])=>`<div class="distRow ${cls}"><span>${name}</span><div class="track"><i style="width:${students.length?n/students.length*100:0}%"></i></div><b>${n}</b></div>`).join('');
+ renderStratumCard(data.students.filter(s=>s.group===group),events,code);
  renderSkillPanel(students,events,code);
  renderJournalGrades(students,events);
  renderElementMatrix(students,events,code,filter);
@@ -440,3 +476,4 @@ $('export').onclick=()=>download('Матрица_КОМ_резервная_ко�
 $('csv').onclick=()=>download('Матрица_КОМ.csv','\uFEFF'+csvRows.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n'),'text/csv;charset=utf-8');
 $('importFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{const next=JSON.parse(await file.text());validate(next);if(!confirm('Заменить текущие данные данными из файла? Перед заменой можно скачать резервную копию.'))return;data=next;mergeStrata(data);mergeNovember(data);selected=new Set(data.events.map(e=>e.id));save();boot();notify('Данные загружены.');}catch(err){notify('Файл не загружен: '+err.message);}finally{e.target.value='';}};
 boot();if(!storageOK)notify('Сохранённые данные не удалось прочитать. Открыт исходный пример; скачайте резервную копию после работы.');
+
